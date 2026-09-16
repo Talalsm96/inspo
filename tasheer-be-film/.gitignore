@@ -1,0 +1,6 @@
+node_modules/
+output/
+stills/
+verify/
+# The scrub player is a base64 copy of the MP4 — regenerate it, don't store it.
+BE_Achievements_2025.html
