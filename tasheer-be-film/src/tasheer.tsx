@@ -27,11 +27,26 @@ export const FONT = 'Cairo';
 export const W = 1920;
 export const H = 1080;
 
+/* Text direction for the whole film. Set it once, before any node is built:
+   the Arabic cut is the same scene with the same beats, read right to left. */
+let RTL = false;
+export function setRtl(value: boolean) {
+  RTL = value;
+}
+export function isRtl() {
+  return RTL;
+}
+/** -1 in an RTL cut, so a mirrored layout is `x * mirror()`. */
+export function mirror() {
+  return RTL ? -1 : 1;
+}
+
 /** Base text props every Txt should start from. */
 export const txt = (over: TxtProps = {}): TxtProps => ({
   fontFamily: FONT,
   fontWeight: 600,
   fill: NAVY,
+  ...(RTL ? {textDirection: 'rtl' as const} : {}),
   ...over,
 });
 
@@ -47,13 +62,14 @@ export interface CaptionBar {
 /** One caption at a time, bottom-centre, ≥ 46 px. Lives OUTSIDE the camera. */
 export function addCaptionBar(view: View2D, opts: {rtl?: boolean; size?: number} = {}): CaptionBar {
   const node = createRef<Txt>();
+  const baseY = H / 2 - 96;
   view.add(
     <Txt
       ref={node}
       {...txt({fontSize: opts.size ?? 48, fontWeight: 500, fill: INK})}
       textDirection={opts.rtl ? 'rtl' : 'ltr'}
       textAlign={'center'}
-      y={H / 2 - 96}
+      y={baseY}
       opacity={0}
       text={''}
     />,
@@ -61,14 +77,87 @@ export function addCaptionBar(view: View2D, opts: {rtl?: boolean; size?: number}
   return {
     node,
     *swap(text, seconds = 0.35) {
-      if (node().opacity() > 0) yield* node().opacity(0, seconds, easeInOutCubic);
+      if (node().opacity() > 0) {
+        yield* all(node().opacity(0, seconds, easeInOutCubic), node().position.y(baseY - 12, seconds));
+      }
       node().text(text);
-      yield* node().opacity(1, seconds, easeInOutCubic);
+      node().position.y(baseY + 16);
+      yield* all(
+        node().opacity(1, seconds, easeInOutCubic),
+        node().position.y(baseY, seconds, easeOutCubic),
+      );
     },
     *hide(seconds = 0.35) {
       yield* node().opacity(0, seconds);
     },
   };
+}
+
+
+/* ---------------------------------------------------------- wrapped text ---
+   Motion Canvas's own `textWrap` mis-places wrapped Arabic: the whole block
+   lands about one line-width to the right of its anchor (single-line text is
+   fine, and so is English). So the RTL cut breaks the lines itself and stacks
+   single-line Txt nodes, which anchor correctly. The LTR cut keeps the native
+   path, so the English film renders exactly as before. */
+
+/** Break a string to a pixel width. Cairo averages ~0.5em per glyph in both scripts. */
+export function breakLines(text: string, width: number, fontSize: number): string[] {
+  const max = Math.max(1, Math.floor(width / (fontSize * 0.5)));
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > max && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+export interface WrapTxtProps {
+  text: string;
+  width: number;
+  fontSize: number;
+  fontWeight?: number;
+  fill?: string;
+  x?: number;
+  y?: number;
+  lineHeight?: number;
+  textAlign?: 'left' | 'right' | 'center';
+}
+
+/** A wrapped block of text that anchors the same way in both cuts. */
+export function wrapTxt(o: WrapTxtProps) {
+  const lh = o.lineHeight ?? o.fontSize + 5;
+  const base = txt({fontSize: o.fontSize, fontWeight: o.fontWeight ?? 500, fill: o.fill ?? INK});
+  if (!RTL) {
+    return (
+      <Txt
+        {...base}
+        x={o.x ?? 0}
+        y={o.y ?? 0}
+        width={o.width}
+        textWrap
+        textAlign={o.textAlign ?? 'center'}
+        lineHeight={lh}
+        text={o.text}
+      />
+    );
+  }
+  const lines = breakLines(o.text, o.width, o.fontSize);
+  const y0 = (o.y ?? 0) - ((lines.length - 1) * lh) / 2;
+  return (
+    <Node x={o.x ?? 0}>
+      {lines.map((line, i) => (
+        <Txt {...base} y={y0 + i * lh} text={line} />
+      ))}
+    </Node>
+  );
 }
 
 /* ------------------------------------------------------------------ counter */
@@ -652,28 +741,37 @@ export function panelStation(
   const left = createRef<Node>();
   const right = createRef<Node>();
   const frame = createRef<Rect>();
+  const lx = -318 * mirror();
+  const rx = 318 * mirror();
   parent.add(
     <Node ref={root} x={props.x} y={props.y ?? 0} opacity={0}>
-      <Rect ref={frame} width={1400} height={760} stroke={NAVY_30} lineWidth={7} radius={40} />
+      <Rect ref={frame} width={1400} height={760} opacity={0} />
+      {[[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => (
+        <Line
+          points={[[sx * 700 - sx * 96, sy * 380], [sx * 700, sy * 380], [sx * 700, sy * 380 - sy * 76]]}
+          stroke={NAVY_30}
+          lineWidth={5}
+          lineCap={'square'}
+        />
+      ))}
       <Txt {...txt({fontSize: 58, fontWeight: 700})} y={-305} text={props.title} />
       <Node ref={head} y={-218}>
         {props.icon}
       </Node>
       <Txt
-        {...txt({fontSize: 26, fontWeight: 700, fill: NAVY_70})}
-        x={-318}
-        y={-152}
+        {...txt({fontSize: 28, fontWeight: 700, fill: NAVY})}
+        x={lx}
+        y={-150}
         text={props.leftLabel ?? '2025 — Achieved'}
       />
       <Txt
-        {...txt({fontSize: 26, fontWeight: 700, fill: NAVY_70})}
-        x={318}
-        y={-152}
+        {...txt({fontSize: 28, fontWeight: 700, fill: NAVY_50})}
+        x={rx}
+        y={-150}
         text={props.rightLabel ?? '2026 — Plan'}
       />
-      <Line points={[[0, -172], [0, 252]]} stroke={NAVY_30} lineWidth={3} lineDash={[10, 10]} />
-      <Node ref={left} x={-318} y={52} />
-      <Node ref={right} x={318} y={52} />
+      <Node ref={left} x={lx} y={52} />
+      <Node ref={right} x={rx} y={52} />
     </Node>,
   );
   return {root, head, left, right, frame};
@@ -697,7 +795,7 @@ export function statCounter(
   },
 ) {
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} />);
   const c = counter(root(), {
     target: o.target,
     suffix: o.suffix ?? '',
@@ -707,14 +805,12 @@ export function statCounter(
     y: -18,
   });
   root().add(
-    <Txt
-      {...txt({fontSize: o.labelSize ?? 20, fontWeight: 500, fill: INK})}
-      y={(o.size ?? 86) / 2 + 12}
-      width={o.labelWidth ?? 240}
-      textWrap
-      textAlign={'center'}
-      text={o.label}
-    />,
+    wrapTxt({
+      text: o.label,
+      width: o.labelWidth ?? 240,
+      fontSize: o.labelSize ?? 20,
+      y: (o.size ?? 86) / 2 + 12,
+    }),
   );
   return {
     root,
@@ -725,50 +821,37 @@ export function statCounter(
   };
 }
 
-/** A single outline or solid pill — the 2026 checklist unit. */
-function makePill(
+/** One line of the plan: text that rises in over a rule drawn from its centre. */
+function makePlanLine(
   parent: Node,
-  o: {text: string; width: number; height: number; y: number; size: number; solid?: boolean},
+  o: {text: string; width: number; height: number; y: number; size: number},
 ) {
   const root = createRef<Node>();
-  const check = createRef<Line>();
+  const rule = createRef<Line>();
   parent.add(
-    <Node ref={root} y={o.y} opacity={0}>
-      <Rect
-        width={o.width}
-        height={o.height}
-        radius={o.height / 2}
-        stroke={o.solid ? NAVY : NAVY_50}
-        lineWidth={o.solid ? 5 : 4}
-        fill={o.solid ? NAVY_10 : null}
-      />
-      <Circle size={30} stroke={o.solid ? NAVY : NAVY_50} lineWidth={4} x={-o.width / 2 + 34} />
+    <Node ref={root} y={o.y + 18} opacity={0}>
+      {wrapTxt({
+        text: o.text,
+        width: o.width - 40,
+        fontSize: o.size,
+        fill: INK,
+        y: -6,
+        lineHeight: o.size + 6,
+      })}
       <Line
-        ref={check}
-        points={[[-8, 0], [-2, 7], [10, -8]]}
-        x={-o.width / 2 + 34}
-        stroke={NAVY}
-        lineWidth={5}
-        lineCap={'round'}
-        lineJoin={'round'}
-        end={0}
-      />
-      <Txt
-        {...txt({fontSize: o.size, fontWeight: 500, fill: INK})}
-        x={-o.width / 2 + 62}
-        offsetX={-1}
-        width={o.width - 84}
-        textWrap
-        textAlign={'left'}
-        lineHeight={o.size + 6}
-        text={o.text}
+        ref={rule}
+        points={[[-o.width / 2, o.height / 2 - 4], [o.width / 2, o.height / 2 - 4]]}
+        stroke={NAVY_30}
+        lineWidth={2}
+        start={0.5}
+        end={0.5}
       />
     </Node>,
   );
-  return {root, check};
+  return {root, rule, y: o.y};
 }
 
-/** Outline checklist pills that tick one by one. The 2026 side of every station. */
+/** The 2026 side of every station: plan lines that rise in one after another. */
 export function checklistPills(
   parent: Node,
   o: {items: string[]; width?: number; height?: number; gap?: number; size?: number; y0?: number},
@@ -779,14 +862,21 @@ export function checklistPills(
   const size = o.size ?? 23;
   const y0 = o.y0 ?? PANEL_TOP + 20 + height / 2;
   const pills = o.items.map((text, i) =>
-    makePill(parent, {text, width, height, size, y: y0 + i * (height + gap)}),
+    makePlanLine(parent, {text, width, height, size, y: y0 + i * (height + gap)}),
   );
   return {
     pills,
     *tick(stagger = 0.25, dur = 0.34): ThreadGenerator {
       yield* sequence(
         stagger,
-        ...pills.map(p => chain(p.root().opacity(1, dur), p.check().end(1, 0.24))),
+        ...pills.map(p =>
+          all(
+            p.root().opacity(1, dur),
+            p.root().position.y(p.y, dur + 0.18, easeOutCubic),
+            p.rule().start(0, dur + 0.3, easeOutCubic),
+            p.rule().end(1, dur + 0.3, easeOutCubic),
+          ),
+        ),
       );
     },
   };
@@ -817,7 +907,7 @@ export function gaugeArc(
   const frac = Math.max(0, Math.min(1, o.value / max));
   const p = createSignal(0);
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} />);
 
   root().add(
     <>
@@ -835,15 +925,13 @@ export function gaugeArc(
         y={-6}
         text={() => (o.value * p()).toFixed(o.decimals ?? 0) + (o.suffix ?? '%')}
       />
-      <Txt
-        {...txt({fontSize: o.labelSize ?? 19, fontWeight: 500, fill: INK})}
-        y={r + 34}
-        width={o.labelWidth ?? size + 90}
-        textWrap
-        textAlign={'center'}
-        lineHeight={(o.labelSize ?? 19) + 6}
-        text={o.label}
-      />
+      {wrapTxt({
+        text: o.label,
+        width: o.labelWidth ?? size + 90,
+        fontSize: o.labelSize ?? 19,
+        y: r + 34,
+        lineHeight: (o.labelSize ?? 19) + 6,
+      })}
     </>,
   );
 
@@ -911,7 +999,7 @@ export function rankedBars(
   const x0 = -width / 2 + labelW + 12;
   const span = width / 2 - 56 - x0;
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} opacity={0} />);
   const progress: SimpleSignal<number>[] = [];
 
   o.items.forEach((b, i) => {
@@ -979,7 +1067,7 @@ export function counterGrid(
   const totalW = o.cols * cw + (o.cols - 1) * gx;
   const totalH = rows * ch + (rows - 1) * gy;
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} />);
   const fills: {sig: SimpleSignal<number>; d: number}[] = [];
   const kind = o.kind ?? 'doc';
 
@@ -1067,14 +1155,14 @@ export function timelineBand(
   const dotR = o.dotR ?? 13;
   const n = o.stops.length;
   const step = o.width / (n - 1);
-  const xs = o.stops.map((_, i) => -o.width / 2 + i * step);
+  const xs = o.stops.map((_, i) => (-o.width / 2 + i * step) * mirror());
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} />);
   const line = createRef<Line>();
   root().add(
     <Line
       ref={line}
-      points={[[-o.width / 2, 0], [o.width / 2, 0]]}
+      points={[[xs[0], 0], [xs[n - 1], 0]]}
       stroke={NAVY_30}
       lineWidth={4}
       end={0}
@@ -1100,25 +1188,23 @@ export function timelineBand(
           stroke={s.solid ? NAVY : NAVY_50}
           lineWidth={4}
         />
-        <Txt
-          {...txt({fontSize: labelSize, fontWeight: 700, fill: s.solid ? NAVY : NAVY_70})}
-          y={up ? -dotR - 22 - labelSize * 0.3 : dotR + 24 + labelSize * 0.3}
-          width={labelW}
-          textWrap
-          textAlign={'center'}
-          lineHeight={labelSize + 4}
-          text={s.label}
-        />
+        {wrapTxt({
+          text: s.label,
+          width: labelW,
+          fontSize: labelSize,
+          fontWeight: 700,
+          fill: s.solid ? NAVY : NAVY_70,
+          y: up ? -dotR - 22 - labelSize * 0.3 : dotR + 24 + labelSize * 0.3,
+          lineHeight: labelSize + 4,
+        })}
         {s.sub ? (
-          <Txt
-            {...txt({fontSize: subSize, fontWeight: 500, fill: INK})}
-            y={subY}
-            width={subW}
-            textWrap
-            textAlign={'center'}
-            lineHeight={subSize + 4}
-            text={s.sub}
-          />
+          wrapTxt({
+            text: s.sub,
+            width: subW,
+            fontSize: subSize,
+            y: subY,
+            lineHeight: subSize + 4,
+          })
         ) : null}
       </Node>,
     );
@@ -1172,19 +1258,19 @@ export function hubSpoke(
   const satR = o.satR ?? 54;
   const root = createRef<Node>();
   parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
-  const hubX = -radius / 2 - 44;
+  const hubX = (-radius / 2 - 44) * mirror();
   root().add(
     <>
       <Circle size={hubR * 2} fill={NAVY} x={hubX} />
-      <Txt
-        {...txt({fontSize: 19, fontWeight: 700, fill: WHITE})}
-        x={hubX}
-        width={hubR * 1.9}
-        textWrap
-        textAlign={'center'}
-        lineHeight={22}
-        text={o.hub}
-      />
+      {wrapTxt({
+        text: o.hub,
+        width: hubR * 1.9,
+        fontSize: 19,
+        fontWeight: 700,
+        fill: WHITE,
+        x: hubX,
+        lineHeight: 22,
+      })}
     </>,
   );
 
@@ -1193,7 +1279,7 @@ export function hubSpoke(
   const sats: Reference<Node>[] = [];
   o.satellites.forEach((s, i) => {
     const a = (angles[i % 3] * Math.PI) / 180;
-    const sx = hubX + Math.cos(a) * radius;
+    const sx = hubX + Math.cos(a) * radius * mirror();
     const sy = Math.sin(a) * radius;
     const sp = createRef<Line>();
     const sn = createRef<Node>();
@@ -1201,7 +1287,7 @@ export function hubSpoke(
       <>
         <Line
           ref={sp}
-          points={[[hubX + Math.cos(a) * (hubR + 6), Math.sin(a) * (hubR + 6)], [sx - Math.cos(a) * (satR + 6), sy - Math.sin(a) * (satR + 6)]]}
+          points={[[hubX + Math.cos(a) * (hubR + 6) * mirror(), Math.sin(a) * (hubR + 6)], [sx - Math.cos(a) * (satR + 6) * mirror(), sy - Math.sin(a) * (satR + 6)]]}
           stroke={NAVY_30}
           lineWidth={4}
           lineDash={[12, 10]}
@@ -1209,25 +1295,22 @@ export function hubSpoke(
         />
         <Node ref={sn} x={sx} y={sy} opacity={0}>
           <Circle size={satR * 2} stroke={NAVY_50} lineWidth={5} />
-          <Txt
-            {...txt({fontSize: 20, fontWeight: 700, fill: NAVY_70})}
-            width={satR * 1.9}
-            textWrap
-            textAlign={'center'}
-            lineHeight={23}
-            text={s.label}
-          />
-          <Txt
-            {...txt({fontSize: 16, fontWeight: 500, fill: INK})}
-            x={o.subSide ? satR + 12 : 0}
-            y={o.subSide ? 0 : satR + 20}
-            offsetX={o.subSide ? -1 : 0}
-            width={o.subWidth ?? 230}
-            textWrap
-            textAlign={o.subSide ? 'left' : 'center'}
-            lineHeight={19}
-            text={s.sub}
-          />
+          {wrapTxt({
+            text: s.label,
+            width: satR * 1.9,
+            fontSize: 20,
+            fontWeight: 700,
+            fill: NAVY_70,
+            lineHeight: 23,
+          })}
+          {wrapTxt({
+            text: s.sub,
+            width: o.subWidth ?? 230,
+            fontSize: 16,
+            x: o.subSide ? (satR + 12 + (o.subWidth ?? 230) / 2) * mirror() : 0,
+            y: o.subSide ? 0 : satR + 20,
+            lineHeight: 19,
+          })}
         </Node>
       </>,
     );
@@ -1250,7 +1333,7 @@ export function hubSpoke(
         ...sats.map((s, i) => {
           const a = (angles[i % 3] * Math.PI) / 180;
           return s().position(
-            [s().position.x() - Math.cos(a) * distance, s().position.y() - Math.sin(a) * distance],
+            [s().position.x() - Math.cos(a) * distance * mirror(), s().position.y() - Math.sin(a) * distance],
             seconds,
             easeInOutCubic,
           );
@@ -1279,54 +1362,56 @@ export function flowBetween(
   },
 ) {
   const nDots = o.dots ?? 4;
+  const from: [number, number] = [o.from[0] * mirror(), o.from[1]];
+  const to: [number, number] = [o.to[0] * mirror(), o.to[1]];
   const root = createRef<Node>();
   const src = createRef<Node>();
   const dst = createRef<Node>();
   parent.add(<Node ref={root} opacity={0} />);
   root().add(
     <>
-      <Line points={[o.from, o.to]} stroke={NAVY_30} lineWidth={3} lineDash={[10, 9]} />
-      <Node ref={src} x={o.from[0]} y={o.from[1]}>
+      <Line points={[from, to]} stroke={NAVY_30} lineWidth={3} lineDash={[10, 9]} />
+      <Node ref={src} x={from[0]} y={from[1]}>
         {o.fromIcon}
       </Node>
-      <Node ref={dst} x={o.to[0]} y={o.to[1]}>
+      <Node ref={dst} x={to[0]} y={to[1]}>
         {o.toIcon}
       </Node>
     </>,
   );
   if (o.fromLabel) {
     root().add(
-      <Txt
-        {...txt({fontSize: o.labelSize ?? 17, fontWeight: 600, fill: NAVY_70})}
-        x={o.from[0]}
-        y={o.from[1] + 58}
-        width={200}
-        textWrap
-        textAlign={'center'}
-        lineHeight={20}
-        text={o.fromLabel}
-      />,
+      wrapTxt({
+        text: o.fromLabel,
+        width: 200,
+        fontSize: o.labelSize ?? 17,
+        fontWeight: 600,
+        fill: NAVY_70,
+        x: from[0],
+        y: from[1] + 58,
+        lineHeight: 20,
+      }),
     );
   }
   if (o.toLabel) {
     root().add(
-      <Txt
-        {...txt({fontSize: o.labelSize ?? 17, fontWeight: 600, fill: NAVY_70})}
-        x={o.to[0]}
-        y={o.to[1] + 58}
-        width={200}
-        textWrap
-        textAlign={'center'}
-        lineHeight={20}
-        text={o.toLabel}
-      />,
+      wrapTxt({
+        text: o.toLabel,
+        width: 200,
+        fontSize: o.labelSize ?? 17,
+        fontWeight: 600,
+        fill: NAVY_70,
+        x: to[0],
+        y: to[1] + 58,
+        lineHeight: 20,
+      }),
     );
   }
 
   const dots: Reference<Circle>[] = [];
   for (let i = 0; i < nDots; i++) {
     const d = createRef<Circle>();
-    root().add(<Circle ref={d} size={o.dotSize ?? 16} fill={o.dotFill ?? NAVY} x={o.from[0]} y={o.from[1]} opacity={0} />);
+    root().add(<Circle ref={d} size={o.dotSize ?? 16} fill={o.dotFill ?? NAVY} x={from[0]} y={from[1]} opacity={0} />);
     dots.push(d);
   }
 
@@ -1340,7 +1425,7 @@ export function flowBetween(
         ...dots.map(d =>
           chain(
             d().opacity(1, 0.12),
-            d().position(o.to, seconds * 0.55, easeInOutCubic),
+            d().position(to, seconds * 0.55, easeInOutCubic),
             all(d().opacity(0, 0.14), d().size(6, 0.14), dst().scale(1.06, 0.1).to(1, 0.12)),
           ),
         ),
@@ -1381,7 +1466,7 @@ export function funnelToStack(
   const tints = [NAVY, NAVY_70, NAVY_50, NAVY_30, NAVY_10];
 
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} opacity={0} />);
 
   const total = o.segments.reduce((a, b) => a + b.value, 0);
   const segW = o.segments.map(s => (s.value / total) * span);
@@ -1403,17 +1488,15 @@ export function funnelToStack(
       <>
         <Rect ref={bar} x={x0} y={y} offsetX={-1} height={barH} width={w[i]} fill={NAVY} radius={4} />
         <Node ref={ft}>
-          <Txt
-            {...txt({fontSize: labelSize, fontWeight: 500, fill: INK})}
-            x={x0 - 14}
-            y={y}
-            offsetX={1}
-            width={labelW - 20}
-            textWrap
-            textAlign={'right'}
-            lineHeight={labelSize + 4}
-            text={b.label}
-          />
+          {wrapTxt({
+            text: b.label,
+            width: labelW - 20,
+            fontSize: labelSize,
+            x: x0 - 14 - (labelW - 20) / 2,
+            y,
+            lineHeight: labelSize + 4,
+            textAlign: 'right',
+          })}
           <Txt
             {...txt({fontSize: labelSize + 4, fontWeight: 700})}
             x={() => x0 + w[i]() + 14}
@@ -1477,16 +1560,18 @@ export function funnelToStack(
     const col = i < 3 ? i : i - 3;
     const perRow = row === 0 ? 3 : 2;
     const cellW = width / perRow;
-    const lx = -width / 2 + cellW * col + 14;
+    const lx = (-width / 2 + cellW * col + 14) * mirror();
     const ly = yStack + barH / 2 + 34 + row * 30;
+    const textW = cellW - 44;
     stackText().add(
       <>
         <Rect width={18} height={18} radius={3} fill={tints[i]} stroke={NAVY_30} lineWidth={2} x={lx} y={ly} />
         <Txt
           {...txt({fontSize: 17, fontWeight: 500, fill: INK})}
-          x={lx + 16}
+          x={lx + (16 + textW / 2) * mirror()}
           y={ly}
-          offsetX={-1}
+          width={textW}
+          textAlign={isRtl() ? 'right' : 'left'}
           text={s.label}
         />
       </>,
@@ -1536,7 +1621,7 @@ export function pdcaRing(
   const nodeR = o.nodeR ?? 30;
   const labels = o.labels ?? ['P', 'D', 'C', 'A'];
   const root = createRef<Node>();
-  parent.add(<Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} />);
+  parent.add(<Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} />);
   const ring = createRef<Circle>();
   root().add(<Circle ref={ring} size={r * 2} stroke={NAVY_30} lineWidth={4} lineDash={[12, 10]} end={0} />);
   const nodes: Reference<Node>[] = [];
@@ -1571,27 +1656,19 @@ export function outlineBadge(
   const r = o.r ?? 56;
   const root = createRef<Node>();
   parent.add(
-    <Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} scale={0.7}>
+    <Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} scale={0.7}>
       <Circle size={r * 2} stroke={o.solid ? NAVY : NAVY_50} lineWidth={5} fill={o.solid ? NAVY_10 : null} />
       <Circle size={r * 2 - 18} stroke={o.solid ? NAVY_50 : NAVY_30} lineWidth={2} />
-      <Txt
-        {...txt({fontSize: 19, fontWeight: 700, fill: o.solid ? NAVY : NAVY_70})}
-        width={r * 1.8}
-        textWrap
-        textAlign={'center'}
-        lineHeight={22}
-        text={o.title}
-      />
+      {wrapTxt({
+        text: o.title,
+        width: r * 1.8,
+        fontSize: 19,
+        fontWeight: 700,
+        fill: o.solid ? NAVY : NAVY_70,
+        lineHeight: 22,
+      })}
       {o.sub ? (
-        <Txt
-          {...txt({fontSize: 16, fontWeight: 500, fill: INK})}
-          y={r + 20}
-          width={r * 3}
-          textWrap
-          textAlign={'center'}
-          lineHeight={19}
-          text={o.sub}
-        />
+        wrapTxt({text: o.sub, width: r * 3, fontSize: 16, y: r + 20, lineHeight: 19})
       ) : null}
     </Node>,
   );
@@ -1612,7 +1689,7 @@ export function datePill(
   const width = o.width ?? 240;
   const root = createRef<Node>();
   parent.add(
-    <Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0} scale={0.8}>
+    <Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0} scale={0.8}>
       <Rect
         width={width}
         height={size + 22}
@@ -1641,7 +1718,7 @@ export function clockSweep(parent: Node, o: {x?: number; y?: number; size?: numb
   const deadline = o.deadline ?? -60; // degrees from 12 o'clock
   const a = ((deadline - 90) * Math.PI) / 180;
   parent.add(
-    <Node ref={root} x={o.x ?? 0} y={o.y ?? 0} opacity={0}>
+    <Node ref={root} x={(o.x ?? 0) * mirror()} y={o.y ?? 0} opacity={0}>
       <Circle size={size} stroke={NAVY} lineWidth={7} />
       <Line
         points={[[Math.cos(a) * (r - 12), Math.sin(a) * (r - 12)], [Math.cos(a) * (r + 14), Math.sin(a) * (r + 14)]]}

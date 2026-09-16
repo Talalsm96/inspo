@@ -5,6 +5,7 @@ Usage:
   python3 scripts/render.py Film.mp4                # full render → MP4
   python3 scripts/render.py --stills 0 2.5 5.5 …    # PNG stills at given seconds → stills/
   python3 scripts/render.py --range 3 6 clip.mp4    # render only seconds 3–6
+  python3 scripts/render.py --lang ar Film_AR.mp4   # the Arabic cut (RTL copy)
 
 Starts the Vite dev server, drives the Motion Canvas editor in headless Chromium
 (clicks RENDER, waits for it to finish), then encodes the PNG sequence with ffmpeg.
@@ -46,7 +47,7 @@ def set_meta(fps=None, rng=None):
     return saved
 
 
-def run_render(headless=True, timeout_s=1800):
+def run_render(headless=True, timeout_s=1800, lang='en'):
     from playwright.sync_api import sync_playwright
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -55,6 +56,7 @@ def run_render(headless=True, timeout_s=1800):
     vite = subprocess.Popen(
         ['npx', 'vite', '--host', '127.0.0.1', '--port', str(port), '--strictPort'],
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        env={**os.environ, 'VITE_LANG': lang},
     )
     try:
         wait_port(port)
@@ -111,6 +113,7 @@ def main():
     ap.add_argument('--stills', nargs='+', type=float, metavar='SECONDS')
     ap.add_argument('--stills-dir', default='stills')
     ap.add_argument('--headed', action='store_true')
+    ap.add_argument('--lang', default='en', choices=['en', 'ar'], help='copy set: en or ar (RTL)')
     a = ap.parse_args()
 
     meta = json.loads(META.read_text())
@@ -121,7 +124,7 @@ def main():
         if a.stills:
             # Render the full sequence once at working fps, then pick frames.
             saved = set_meta(fps=fps, rng=[0, None])
-            frames = run_render(headless=not a.headed)
+            frames = run_render(headless=not a.headed, lang=a.lang)
             d = ROOT / a.stills_dir
             d.mkdir(exist_ok=True)
             for t in a.stills:
@@ -132,7 +135,7 @@ def main():
             print(f'{len(frames)} frames rendered ({len(frames)/fps:.2f} s)')
             return
         saved = set_meta(fps=fps, rng=a.range if a.range else [0, None])
-        frames = run_render(headless=not a.headed)
+        frames = run_render(headless=not a.headed, lang=a.lang)
         out = Path(a.output)
         if not out.is_absolute():
             out = ROOT / out
