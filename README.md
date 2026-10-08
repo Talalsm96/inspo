@@ -43,6 +43,14 @@ Fifteen tools expose all of it; `recommend(brief)` composes most of them into on
 
 Per-client snippets (Cursor, Windsurf, Zed, Claude Desktop) are on [the MCP page](https://inspomcp.dev/mcp); the self-host runbook is [DEPLOY.md](DEPLOY.md).
 
+## Agent Skill
+
+[`skills/inspo`](skills/inspo/SKILL.md) is an Agent Skill that teaches the workflow, not just the tools: when to reach for Inspo, how to study on a budget, and the composition rules to build to. It works without the MCP server too - `scripts/inspo.sh` calls the hosted endpoint over HTTPS. Install it by telling your agent:
+
+> Read https://inspomcp.dev/skill/install.md and follow the instructions to install the Inspo skill.
+
+or with `npx skills add Nutlope/inspo --skill inspo`. Every option is on [the skill page](https://inspomcp.dev/skill), which serves the files straight from this folder.
+
 ## Roadmap
 
 - [ ] show the desktop and mobile capture side by side on every screen page

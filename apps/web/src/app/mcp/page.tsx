@@ -268,6 +268,17 @@ export default async function MCPPage() {
           <div className="mt-10 text-left">
             <InstallTabs tabs={installTabs} />
           </div>
+
+          <p className="mt-5 text-sm text-[var(--color-fg-muted)]">
+            Want the workflow too?{" "}
+            <Link
+              href="/skill"
+              className="underline-offset-4 hover:text-[var(--color-link)] hover:underline"
+            >
+              Add the Inspo skill
+            </Link>{" "}
+            - it teaches your agent when and how to study before it builds.
+          </p>
         </div>
       </section>
 
